@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel Run</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+:root{--sky:#5c94fc;--ink:#1b1b2f;--gold:#ffd23f;--brick:#b5522b}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--ink);color:#fff;font-family:'Press Start 2P',monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:8px;touch-action:manipulation}
+canvas{width:min(100%,960px);aspect-ratio:480/272;image-rendering:pixelated;border:4px solid #fff;background:var(--sky)}
+.pad{display:flex;gap:10px}
+.pad button{font:inherit;font-size:16px;width:64px;height:48px;background:var(--brick);color:#fff;border:3px solid #fff;box-shadow:0 4px 0 #000;cursor:pointer;user-select:none;-webkit-user-select:none}
+.pad button:active{transform:translateY(3px);box-shadow:0 1px 0 #000}
+.pad button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+p{font-size:9px;line-height:1.9;margin:0;text-align:center;max-width:640px;opacity:.85}
+@media(hover:hover) and (pointer:fine){.pad{display:none}}
+</style>
+</head>
+<body>
+<canvas id="g" width="480" height="272" aria-label="Game platformer pixel"></canvas>
+<div class="pad">
+  <button data-k="left" aria-label="Kiri">&lt;</button>
+  <button data-k="right" aria-label="Kanan">&gt;</button>
+  <button data-k="jump" aria-label="Lompat">A</button>
+</div>
+<p>Panah kiri/kanan atau A/D untuk jalan. Spasi atau panah atas untuk lompat. Injak slime untuk mengalahkannya, capai bendera.</p>
+<script>
+const cv=document.getElementById('g'),c=cv.getContext('2d');
+const T=16,W=480,H=272,LW=130,GR=15,FLAG=120;
+const solid=new Set(),K=(x,y)=>x+','+y,blk=(x,y)=>solid.add(K(x,y));
+
+/* ====== LEVEL: ubah angka di sini untuk bikin level sendiri ====== */
+const gaps=[[22,24],[45,48],[70,73],[96,98]];
+const plats=[[10,13,11],[28,31,10],[34,36,8],[52,56,11],[60,62,9],[76,80,10],[84,86,8],[100,104,11]];
+const enemyCols=[18,40,58,66,90,106];
+for(let x=0;x<LW;x++)if(!gaps.some(g=>x>=g[0]&&x<=g[1])){blk(x,GR);blk(x,GR+1)}
+plats.forEach(([a,b,r])=>{for(let x=a;x<=b;x++)blk(x,r)});
+for(let i=0;i<4;i++)for(let j=0;j<=i;j++)blk(112+i,GR-1-j);
+const coins=[];
+plats.forEach(([a,b,r])=>{for(let x=a;x<=b;x++)coins.push({x:x*T+8,y:(r-2)*T+8})});
+gaps.forEach(g=>coins.push({x:(g[0]+g[1]+1)*T/2,y:12*T}));
+/* ================================================================= */
+
+const PAL={C:'#2ec4b6',S:'#ffcba4',K:'#5b3a29',B:'#3a86ff',O:'#ff9f1c',Y:'#ffd23f',P:'#9b5de5',D:'#5a2ea6',W:'#fff'};
+const HERO=['....CCCCC...','...CCCCCCCCC','...KKKSSKS..','..KSKSSSKSSS','..KSKKSSSKSS','...SSSSSKKKK','....SSSSSSS.','...OOBOOO...','..OOOBOOBOO.','.OOOOBBBBOOO','SSOBYBBYBOSS','SSSBBBBBBSSS'];
+const LEGS=[['..BBB..BBB..','.KKKK..KKKK.'],['...BBBBBB...','..KKKKKKKK..']];
+const SLIME=['....PPPPPP....','..PPPPPPPPPP..','.PPPPPPPPPPPP.','PPPWWPPPPWWPPP','PPPWKPPPPWKPPP','PPPPPPPPPPPPPP','DDDDDDDDDDDDDD','.DD..DDDD..DD.'];
+function spr(rows,x,y,flip){const w=rows[0].length;x=Math.round(x);y=Math.round(y);rows.forEach((r,j)=>{for(let i=0;i<w;i++){const ch=r[flip?w-1-i:i];if(PAL[ch]){c.fillStyle=PAL[ch];c.fillRect(x+i,y+j,1,1)}}})}
+
+const P={};let enemies=[],state='title',score=0,ncoin=0,lives=3,cam=0,jp=0,tick=0;
+const keys={},pad={};
+function reset(){Object.assign(P,{x:32,y:200,vx:0,vy:0,w:12,h:14,g:false,f:1,t:0})}
+function build(){enemies=enemyCols.map(x=>({x:x*T,y:GR*T-8,w:14,h:8,vx:-.4,dead:0}));coins.forEach(o=>o.got=0)}
+function start(){state='play';lives=3;score=0;ncoin=0;reset();build()}
+function act(){if(state!=='play')start()}
+function die(){lives--;if(lives<=0)state='over';else reset()}
+
+function hit(x,y,w,h){for(let tx=Math.floor(x/T);tx<=Math.floor((x+w-.01)/T);tx++)for(let ty=Math.floor(y/T);ty<=Math.floor((y+h-.01)/T);ty++)if(solid.has(K(tx,ty)))return true;return false}
+function mv(dx,dy){const n=Math.ceil(Math.max(Math.abs(dx),Math.abs(dy)));if(!n)return false;const sx=dx/n,sy=dy/n;for(let i=0;i<n;i++){P.x+=sx;P.y+=sy;if(hit(P.x,P.y,P.w,P.h)){P.x-=sx;P.y-=sy;return true}}return false}
+
+function step(){
+  if(state!=='play')return;
+  P.t++;
+  const L=keys.ArrowLeft||keys.a||pad.left,R=keys.ArrowRight||keys.d||pad.right,J=keys.ArrowUp||keys.w||keys[' ']||pad.jump;
+  const tv=((R?1:0)-(L?1:0))*1.7;
+  P.vx+=(tv-P.vx)*.25;if(tv)P.f=tv>0?1:-1;if(Math.abs(P.vx)<.05)P.vx=0;
+  if(jp&&P.g){P.vy=-7;P.g=false}jp=0;
+  if(!J&&P.vy<-2.5)P.vy=-2.5;
+  P.vy=Math.min(P.vy+.35,7);
+  if(mv(P.vx,0))P.vx=0;
+  if(mv(0,P.vy)){if(P.vy>0)P.g=true;P.vy=0}else P.g=false;
+  if(P.x<0)P.x=0;
+  if(P.y>H+30)return die();
+  coins.forEach(o=>{if(!o.got&&Math.abs(P.x+6-o.x)<10&&Math.abs(P.y+7-o.y)<12){o.got=1;score+=10;ncoin++}});
+  let dead=false;
+  enemies.forEach(e=>{
+    if(e.dead)return;
+    e.x+=e.vx;
+    const ax=Math.floor((e.x+(e.vx>0?e.w:0))/T),by=Math.floor((e.y+e.h)/T),ay=Math.floor((e.y+e.h-1)/T);
+    if(solid.has(K(ax,ay))||!solid.has(K(ax,by)))e.vx*=-1;
+    if(P.x<e.x+e.w&&P.x+P.w>e.x&&P.y<e.y+e.h&&P.y+P.h>e.y){
+      if(P.vy>0&&P.y+P.h-e.y<9){e.dead=1;P.vy=-4.5;score+=100}else dead=true;
+    }
+  });
+  if(dead)return die();
+  if(P.x+P.w>FLAG*T+4){score+=lives*50;state='win'}
+}
+
+const clouds=[[40,40,40],[190,70,56],[330,36,40],[470,64,48],[610,44,56]];
+function txt(s,x,y,col,al,sz){c.font=(sz||8)+'px "Press Start 2P",monospace';c.textAlign=al||'left';c.fillStyle='#000';c.fillText(s,x+1,y+1);c.fillStyle=col||'#fff';c.fillText(s,x,y)}
+function tile(x,y){
+  const px=x*T-cam,py=y*T;
+  c.fillStyle='#b5522b';c.fillRect(px,py,T,T);
+  c.fillStyle='#7a3417';c.fillRect(px,py+T-1,T,1);c.fillRect(px+T-1,py,1,T);c.fillRect(px,py+7,T,1);
+  c.fillStyle='#d9753f';c.fillRect(px,py,T-1,1);
+  if(!solid.has(K(x,y-1))){c.fillStyle='#3bb54a';c.fillRect(px,py,T,4);c.fillStyle='#2a8a37';c.fillRect(px,py+4,T,1)}
+}
+function draw(){
+  tick++;
+  cam=Math.round(Math.max(0,Math.min(LW*T-W,P.x-W/2.5)));
+  c.fillStyle='#5c94fc';c.fillRect(0,0,W,H);
+  c.fillStyle='#fff';
+  clouds.forEach(([x,y,w])=>{const px=(((x-cam*.4)%(W+120))+W+120)%(W+120)-60;c.fillRect(px,y,w,8);c.fillRect(px+8,y-6,w-16,6)});
+  for(let x=Math.floor(cam/T);x<=Math.floor((cam+W)/T);x++)for(let y=0;y<17;y++)if(solid.has(K(x,y)))tile(x,y);
+  coins.forEach(o=>{if(o.got)return;const w=Math.max(2,Math.round(Math.abs(Math.sin((tick+o.x)/12))*8));c.fillStyle='#ffd23f';c.fillRect(Math.round(o.x-cam-w/2),o.y-6,w,12);c.fillStyle='#c98f00';c.fillRect(Math.round(o.x-cam-w/2),o.y+4,w,2)});
+  const fx=FLAG*T-cam;
+  c.fillStyle='#fff';c.fillRect(fx+7,6*T,2,9*T);c.fillStyle='#ffd23f';c.fillRect(fx+5,6*T-5,6,6);
+  c.fillStyle='#e63946';for(let i=0;i<8;i++)c.fillRect(fx-i+6-8+8,6*T+2+i,8-i,1);
+  enemies.forEach(e=>{if(!e.dead)spr(SLIME,e.x-cam,e.y,e.vx>0)});
+  if(state!=='over'){const air=!P.g,run=Math.abs(P.vx)>.3;const fr=air?1:run?Math.floor(P.t/6)%2:0;spr(HERO,P.x-cam,P.y,P.f<0);spr(LEGS[fr],P.x-cam,P.y+12,P.f<0)}
+  txt('SKOR '+String(score).padStart(5,'0'),10,16);
+  txt('KOIN x'+ncoin,W/2,16,'#ffd23f','center');
+  txt('NYAWA x'+lives,W-10,16,'#fff','right');
+  if(state!=='play'){
+    c.fillStyle='rgba(0,0,0,.5)';c.fillRect(0,0,W,H);
+    const t={title:['PIXEL RUN','#ffd23f'],over:['GAME OVER','#e63946'],win:['KAMU MENANG!','#3bb54a']}[state];
+    txt(t[0],W/2,112,t[1],'center',20);
+    if(state!=='title')txt('SKOR '+score,W/2,142,'#fff','center',10);
+    if(Math.floor(tick/30)%2)txt('ENTER / SPASI / TAP',W/2,184,'#fff','center',10);
+  }
+}
+
+addEventListener('keydown',e=>{
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key))e.preventDefault();
+  if(keys[e.key])return;keys[e.key]=1;
+  if(e.key==='ArrowUp'||e.key==='w'||e.key===' ')jp=1;
+  if(e.key==='Enter'||e.key===' ')act();
+});
+addEventListener('keyup',e=>keys[e.key]=0);
+cv.addEventListener('pointerdown',act);
+document.querySelectorAll('.pad button').forEach(b=>{
+  const k=b.dataset.k;
+  b.addEventListener('pointerdown',e=>{e.preventDefault();pad[k]=1;if(k==='jump')jp=1;act()});
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>pad[k]=0));
+});
+
+reset();build();
+let last=0,acc=0;
+(function loop(t){acc+=Math.min(t-last,100);last=t;while(acc>=16.67){step();acc-=16.67}draw();requestAnimationFrame(loop)})(0);
+</script>
+</body>
+</html>
